@@ -371,9 +371,9 @@ function renderd_command(req)
     end
     tcpsock:send(req)
     local data, err = tcpsock:receive(renderd_cmd_max_size)
-    udpsock:close()
+    tcpsock:close()
     if not data then
-        ngx.log(ngx.ERR, "timeout ", mx, " ", my, " ", mz, err)
+        ngx.log(ngx.ERR, "timeout ", err)
         return nil
     end
     -- check result
@@ -394,7 +394,13 @@ end
 -- return:   if ok ngx.OK, if not ok then nil
 --
 function send_renderd_request (map, x, y, z)
-
+    local req = pack_msg({["cmd"] = renderd_cmd["cmdRender"];
+                           ["x"] = tonumber(x);
+                           ["y"] = tonumber(y);
+                           ["z"] = tonumber(z);
+                           ["map"] = tostring(map)
+                         })
+    return renderd_command(req)
 end
 
 -- ---------------------------------------------------------------
