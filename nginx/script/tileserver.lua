@@ -25,151 +25,8 @@ local bit = require 'bit'
 --
 local metatile = 8
 
--- ========================================================
--- protocol definitions
---
--- ========================================================
--- Tirex
---
--- command
---   char[]
---       'id=id, type = xxx, x = x, y=y, z=z, map=map,prio=prio'
--- interface master.sock(datagram)
---
-local tirex_results =       {'ok',
-                              'error',
-                              'error_illegal_prio',
-                              'error_ellegal_metatile'}
-
-local tirex_command_types = {'metatile_enqueue_request',
-                              'metatile_remove_request',
-                              'ping',
-                              'reset_max_queue_size',
-                              'quit',
-                              'debug',
-                              'nodebug',
-                              'stop_rendering_bucket',
-                              'continue_rendering_bucket',
-                              'reload_config',
-                              'shutdown'}
-
--- ========================================================
---
--- renderd/mod_tile
---
--- command/response
---        int32 ver
---        int32 cmd
---        int32 x
---        int32 y
---        int32 z
---        char[] map
---
--- interface /tmp/osm-renderd (stream)
---
-local renderd_cmd = {['cmdIgnore'] = 0;
-                      ['cmdRender'] = 1;
-                      ['cmdDirty']  = 2;
-                      ['cmdDone']   = 3;
-                      ['cmdNotDone']= 4;
-                      ['cmdRenderPrio'] = 5;
-                      ['cmdRenderBulk'] = 6
-                     }
-
-local renderd_protocol_ver = 2
-local renderd_map_length = 41
-
--- ========================================================
-
--- ---------------------------------------------------------------
--- Utility functions
---
--- serialize/deserialize
--- bet table <-> string 
--- ---------------------------------------------------------------
-
--- function: serialize_msg
--- argument: table msg
---     hash table {key1=val1, key2=val2,....}
--- return: string
---     should be 'key1=val1\nkey2=val2\n....\n'
---
-function serialize_msg (msg)
-    local str = ''
-    for k,v in pairs(msg) do
-        str = str .. k .. '=' .. tostring(v) .. '\n'
-    end
-    return str
-end
-
--- function: deserialize_msg
--- arguments: string str: recieved message from tirex
---     should be 'key1=val1\nkey2=val2\n....\n'
--- return: table
---     hash table {key1=val1, key2=val2,....}
-function deserialize_msg (str) 
-    local msg = {}
-    for line in string.gmatch(str, "[^\n]+") do
-        m,_,k,v = string.find(line,"([^=]+)=(.+)")
-        if  k ~= '' then
-            msg[k]=v
-        end
-    end
-    return msg
-end
-
--- function: get_long
--- argument  string buffer
---           number offset
--- return    long value
---
-function get_long (buffer, offset)
-    return ((buffer:byte(offset+4) * 256 + buffer:byte(offset+3)) * 256 + buffer:byte(offset+2)) * 256 + buffer:byte(offset+1)
-end
-
--- function: add_long
--- argument  string buffer
---           number val
--- return    string buffer
---
-function form_long (val)
-    return string.char(val%256, bit.rshift(val,8)%256, bit.rshift(val, 16)%256, bit.rshift(val, 24)%256)
-end
-
--- fucntion: pack_msg(msg)
--- argument table msg
---     hash table {key1=val1, key2=val2,....}
--- return: binary data
---     int32* + char*
---     char length = 41
-function pack_msg(msg)
-    local map = tostring(msg['map'])
-    local data = form_long(renderd_protocol_ver) ..
-                  form_long(tonumber(msg['cmd'])) ..
-                  form_long(tonumber(msg['x'])) ..
-                  form_long(tonumber(msg['y'])) ..
-                  form_long(data, 16, tonumber(msg['z'])) ..
-                  map ..
-                  rep("\000", renderd_map_length - map:len())
-    return data
-end
-
--- fucntion: unpack_msg(data)
--- argument binary data
---     int32* + char*
--- return table msg
---     hash table {key1=val1, key2=val2,....}
-function unpack_msg(data)
-    local msg = {}
-    msg['ver'] = get_long(data,0)
-    msg['cmd'] = get_long(data,4)
-    msg['x']   = get_long(data,8)
-    msg['y']   = get_long(data,12)
-    msg['z']   = get_long(data,16)
-    pad = data:find("\000",21)
-    msg['map'] = data:sub(21,pad)
-end
-
+-- ------------------------------------
+-- module(...) -- SyncThread
 -- ------------------------------------
 -- Syncronize thread functions
 --
@@ -242,6 +99,7 @@ end
 
 -- ---------------------------------------------------------------
 -- Tirex Interface
+-- module(...) -- tirex
 --
 -- ---------------------------------------------------------------
 local tirexsock = 'unix:/var/run/tirex/master.sock'
@@ -250,31 +108,63 @@ local tirex_sync_duration = 240 -- should be in sec
 local tirex_cmd_max_size = 512
 local tirex_resp_timeout = 30000
 
--- function: request_tirex_render
---  enqueue request to tirex server
+-- ========================================================
+-- protocol definition
 --
-function request_tirex_render(map, mx, my, mz, id)
-    -- Create request command
-    local priority = 8
-    local req = serialize_msg({
-        ["id"]   = tostring(id);
-        ["type"] = 'metatile_enqueue_request';
-        ["prio"] = priority;
-        ["map"]  = map;
-        ["x"]    = mx;
-        ["y"]    = my;
-        ["z"]    = mz})
-     return tirex_command(req)
+-- command
+--   char[]
+--       'id=id, type = xxx, x = x, y=y, z=z, map=map,prio=prio'
+-- interface master.sock(datagram)
+--
+local tirex_results =       {'ok',
+                              'error',
+                              'error_illegal_prio',
+                              'error_ellegal_metatile'}
+
+local tirex_command_types = {'metatile_enqueue_request',
+                              'metatile_remove_request',
+                              'ping',
+                              'reset_max_queue_size',
+                              'quit',
+                              'debug',
+                              'nodebug',
+                              'stop_rendering_bucket',
+                              'continue_rendering_bucket',
+                              'reload_config',
+                              'shutdown'}
+
+-- ========================================================
+-- serialize/deserialize
+-- bet table <-> string 
+
+-- function: serialize_msg
+-- argument: table msg
+--     hash table {key1=val1, key2=val2,....}
+-- return: string
+--     should be 'key1=val1\nkey2=val2\n....\n'
+--
+function serialize_msg (msg)
+    local str = ''
+    for k,v in pairs(msg) do
+        str = str .. k .. '=' .. tostring(v) .. '\n'
+    end
+    return str
 end
 
--- function request_tirex_debug
---   debug request to tirex server
-function request_tirex_debug()
-    local req = serialize_msg({
-        ["id"]=tostoring(ngx.time());
-        ["type"]="debug"
-    })
-    return tirex_command(req)
+-- function: deserialize_msg
+-- arguments: string str: recieved message from tirex
+--     should be 'key1=val1\nkey2=val2\n....\n'
+-- return: table
+--     hash table {key1=val1, key2=val2,....}
+function deserialize_msg (str) 
+    local msg = {}
+    for line in string.gmatch(str, "[^\n]+") do
+        m,_,k,v = string.find(line,"([^=]+)=(.+)")
+        if  k ~= '' then
+            msg[k]=v
+        end
+    end
+    return msg
 end
 
 -- function: tirex_command
@@ -309,6 +199,35 @@ function tirex_command(req)
     return ngx.OK
 end
 
+-- ========================================================
+-- function: request_tirex_render
+--  enqueue request to tirex server
+--
+function request_tirex_render(map, mx, my, mz, id)
+    -- Create request command
+    local priority = 8
+    local req = serialize_msg({
+        ["id"]   = tostring(id);
+        ["type"] = 'metatile_enqueue_request';
+        ["prio"] = priority;
+        ["map"]  = map;
+        ["x"]    = mx;
+        ["y"]    = my;
+        ["z"]    = mz})
+     return tirex_command(req)
+end
+
+-- function request_tirex_debug
+--   debug request to tirex server
+function request_tirex_debug()
+    local req = serialize_msg({
+        ["id"]=tostoring(ngx.time());
+        ["type"]="debug"
+    })
+    return tirex_command(req)
+end
+
+-- ========================================================
 -- funtion: send_tirex_request
 -- argument: map, x, y, z
 -- return:   if ok ngx.OK, if not ok then nil
@@ -341,16 +260,105 @@ function send_tirex_request (map, x, y, z)
 
     return ngx.OK
 end
+-- ---------------------------------------------------------------
+-- End of Tirex Interface
+--
+-- ---------------------------------------------------------------
 
 -- ---------------------------------------------------------------
 -- Renderd Interface
---
+-- module(...) -- renderd
 -- ---------------------------------------------------------------
 local renderdsock = 'unix:/var/lib/tirex/modtile.sock'
 local renderdtile = "/var/lib/tirex/tiles/"
 local renderd_resp_timeout = 30000
 
+-- ========================================================
+-- protocol definitions
+--
+-- ========================================================
+--
+-- renderd/mod_tile
+--
+-- command/response
+--        int32 ver
+--        int32 cmd
+--        int32 x
+--        int32 y
+--        int32 z
+--        char[] map
+--
+-- interface /tmp/osm-renderd (stream)
+--
+local renderd_cmd = {['cmdIgnore'] = 0;
+                      ['cmdRender'] = 1;
+                      ['cmdDirty']  = 2;
+                      ['cmdDone']   = 3;
+                      ['cmdNotDone']= 4;
+                      ['cmdRenderPrio'] = 5;
+                      ['cmdRenderBulk'] = 6
+                     }
 
+local renderd_protocol_ver = 2
+local renderd_map_length = 41
+
+-- function: get_long
+-- argument  string buffer
+--           number offset
+-- return    long value
+--
+function get_long (buffer, offset)
+    return ((buffer:byte(offset+4) * 256 + buffer:byte(offset+3)) * 256 + buffer:byte(offset+2)) * 256 + buffer:byte(offset+1)
+end
+
+-- function: add_long
+-- argument  string buffer
+--           number val
+-- return    string buffer
+--
+function form_long (val)
+    return string.char(val%256, bit.rshift(val,8)%256, bit.rshift(val, 16)%256, bit.rshift(val, 24)%256)
+end
+
+-- fucntion: pack_msg(msg)
+-- argument table msg
+--     hash table {key1=val1, key2=val2,....}
+-- return: binary data
+--     int32* + char*
+--     char length = 41
+function pack_msg(msg)
+    local map = tostring(msg['map'])
+    local data = form_long(renderd_protocol_ver) ..
+                  form_long(tonumber(msg['cmd'])) ..
+                  form_long(tonumber(msg['x'])) ..
+                  form_long(tonumber(msg['y'])) ..
+                  form_long(data, 16, tonumber(msg['z'])) ..
+                  map ..
+                  rep("\000", renderd_map_length - map:len())
+    return data
+end
+
+-- fucntion: unpack_msg(data)
+-- argument binary data
+--     int32* + char*
+-- return table msg
+--     hash table {key1=val1, key2=val2,....}
+function unpack_msg(data)
+    local msg = {}
+    msg['ver'] = get_long(data,0)
+    msg['cmd'] = get_long(data,4)
+    msg['x']   = get_long(data,8)
+    msg['y']   = get_long(data,12)
+    msg['z']   = get_long(data,16)
+    pad = data:find("\000",21)
+    msg['map'] = data:sub(21,pad)
+end
+
+
+-- ---------------------------------------------------------------
+-- End of Renderd Interface
+--
+-- ---------------------------------------------------------------
 
 -- ---------------------------------------------------------------
 -- Metatile routines
@@ -435,6 +443,11 @@ function send_tile(map, x, y, z)
     fd:close()
     return ngx.OK
 end
+
+-- ---------------------------------------------------------------
+-- End of Metatile routines
+--
+-- ---------------------------------------------------------------
 
 -- ---------------------------------------------------------------
 -- The main routine
