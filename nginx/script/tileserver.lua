@@ -25,6 +25,62 @@ local bit = require 'bit'
 --
 local metatile = 8
 
+-- ========================================================
+-- protocol definitions
+--
+-- ========================================================
+-- Tirex
+--
+-- command
+--   char[]
+--       'id=id, type = xxx, x = x, y=y, z=z, map=map,prio=prio'
+-- interface master.sock(datagram)
+--
+local tirex_results =       {'ok',
+                              'error',
+                              'error_illegal_prio',
+                              'error_ellegal_metatile'}
+
+local tirex_command_types = {'metatile_enqueue_request',
+                              'metatile_remove_request',
+                              'ping',
+                              'reset_max_queue_size',
+                              'quit',
+                              'debug',
+                              'nodebug',
+                              'stop_rendering_bucket',
+                              'continue_rendering_bucket',
+                              'reload_config',
+                              'shutdown'}
+
+-- ========================================================
+--
+-- renderd/mod_tile
+--
+-- command/response
+--        int32 ver
+--        int32 cmd
+--        int32 x
+--        int32 y
+--        int32 z
+--        char[] map
+--
+-- interface /tmp/osm-renderd (stream)
+--
+local renderd_cmd = {['cmdIgnore'] = 0;
+                      ['cmdRender'] = 1;
+                      ['cmdDirty']  = 2;
+                      ['cmdDone']   = 3;
+                      ['cmdNotDone']= 4;
+                      ['cmdRenderPrio'] = 5;
+                      ['cmdRenderBulk'] = 6
+                     }
+
+local renderd_protocol_ver = 2
+local renderd_map_length = 41
+
+-- ========================================================
+
 -- ---------------------------------------------------------------
 -- Utility functions
 --
@@ -62,6 +118,57 @@ function deserialize_msg (str)
     return msg
 end
 
+-- function: get_long
+-- argument  string buffer
+--           number offset
+-- return    long value
+--
+function get_long (buffer, offset)
+    return ((buffer:byte(offset+4) * 256 + buffer:byte(offset+3)) * 256 + buffer:byte(offset+2)) * 256 + buffer:byte(offset+1)
+end
+
+-- function: add_long
+-- argument  string buffer
+--           number val
+-- return    string buffer
+--
+function form_long (val)
+    return string.char(val%256, bit.rshift(val,8)%256, bit.rshift(val, 16)%256, bit.rshift(val, 24)%256)
+end
+
+-- fucntion: pack_msg(msg)
+-- argument table msg
+--     hash table {key1=val1, key2=val2,....}
+-- return: binary data
+--     int32* + char*
+--     char length = 41
+function pack_msg(msg)
+    local map = tostring(msg['map'])
+    local data = form_long(renderd_protocol_ver) ..
+                  form_long(tonumber(msg['cmd'])) ..
+                  form_long(tonumber(msg['x'])) ..
+                  form_long(tonumber(msg['y'])) ..
+                  form_long(data, 16, tonumber(msg['z'])) ..
+                  map ..
+                  rep("\000", renderd_map_length - map:len())
+    return data
+end
+
+-- fucntion: unpack_msg(data)
+-- argument binary data
+--     int32* + char*
+-- return table msg
+--     hash table {key1=val1, key2=val2,....}
+function unpack_msg(data)
+    local msg = {}
+    msg['ver'] = get_long(data,0)
+    msg['cmd'] = get_long(data,4)
+    msg['x']   = get_long(data,8)
+    msg['y']   = get_long(data,12)
+    msg['z']   = get_long(data,16)
+    pad = data:find("\000",21)
+    msg['map'] = data:sub(21,pad)
+end
 
 -- ------------------------------------
 -- Syncronize thread functions
@@ -234,6 +341,16 @@ function send_tirex_request (map, x, y, z)
 
     return ngx.OK
 end
+
+-- ---------------------------------------------------------------
+-- Renderd Interface
+--
+-- ---------------------------------------------------------------
+local renderdsock = 'unix:/var/lib/tirex/modtile.sock'
+local renderdtile = "/var/lib/tirex/tiles/"
+local renderd_resp_timeout = 30000
+
+
 
 -- ---------------------------------------------------------------
 -- Metatile routines
