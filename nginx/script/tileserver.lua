@@ -25,6 +25,9 @@ local bit = require 'bit'
 --
 local metatile = 8
 
+
+
+
 -- ------------------------------------
 -- module(...) -- SyncThread
 -- ------------------------------------
@@ -96,6 +99,15 @@ function wait_signal(key,timeout)
     end
     return nil
 end
+
+-- ------------------------------------
+-- end of SyncThread
+-- ------------------------------------
+
+
+
+
+
 
 -- ---------------------------------------------------------------
 -- Tirex Interface
@@ -227,43 +239,19 @@ function request_tirex_debug()
     return tirex_command(req)
 end
 
--- ========================================================
--- funtion: send_tirex_request
--- argument: map, x, y, z
--- return:   if ok ngx.OK, if not ok then nil
---
-function send_tirex_request (map, x, y, z)
-    local mx = x - x % 8
-    local my = y - y % 8
-    local mz = z
-    local id = ngx.time()
-    local index = string.format("%s:%d:%d:%d",map, mx, my, mz)
-
-    local ok, err = get_handle(index, tirex_sync_duration, id)
-    if not ok then
-        -- someone have already start Tirex session
-        -- wait other side(*), sync..
-        return wait_signal(index, 30)
-    end
-
-    -- Start Tirex session
-    local ok = request_tirex_render(map, mx, my, mz, id)
-    if not ok then
-        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
-    end
-
-    -- We got new metatile. signal to who waiting above(*)
-    local ok,err = send_signal(index)
-    if not ok then
-        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
-    end
-
-    return ngx.OK
-end
 -- ---------------------------------------------------------------
 -- End of Tirex Interface
 --
 -- ---------------------------------------------------------------
+
+
+
+
+
+
+
+
+
 
 -- ---------------------------------------------------------------
 -- Renderd Interface
@@ -389,11 +377,11 @@ function renderd_command(req)
 end
 
 -- ========================================================
--- funtion: send_renderd_request
+-- funtion: request_renderd_render
 -- argument: map, x, y, z
 -- return:   if ok ngx.OK, if not ok then nil
 --
-function send_renderd_request (map, x, y, z)
+function request_renderd_render (map, x, y, z)
     local req = pack_msg({["cmd"] = renderd_cmd["cmdRender"];
                            ["x"] = tonumber(x);
                            ["y"] = tonumber(y);
@@ -407,6 +395,15 @@ end
 -- End of Renderd Interface
 --
 -- ---------------------------------------------------------------
+
+
+
+
+
+
+
+
+
 
 -- ---------------------------------------------------------------
 -- Metatile routines
@@ -497,10 +494,62 @@ end
 --
 -- ---------------------------------------------------------------
 
--- ---------------------------------------------------------------
+
+
+
+
+
+
+-- ========================================================
+-- 
+-- Core
+--
+-- ========================================================
+-- funtion: send_request
+-- argument: engine, map, x, y, z
+-- return:   if ok ngx.OK, if not ok then nil
+--
+function send_request (engine, map, x, y, z)
+    local mx = x - x % 8
+    local my = y - y % 8
+    local mz = z
+    local id = ngx.time()
+    local index = string.format("%s:%d:%d:%d",map, mx, my, mz)
+
+    local ok, err = get_handle(index, tirex_sync_duration, id)
+    if not ok then
+        -- someone have already start Tirex session
+        -- wait other side(*), sync..
+        return wait_signal(index, 30)
+    end
+
+    if engine == 'tirex' then
+        -- Start Tirex session
+        local ok = request_tirex_render(map, mx, my, mz, id)
+    elseif engine == 'renderd' then
+        -- Start Renderd session
+        local ok = request_renderd_render(map, mx, my, mz, id)
+    else
+        local ok = nil
+    end
+
+    if not ok then
+        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+    end
+
+    -- We got new metatile. signal to who waiting above(*)
+    local ok,err = send_signal(index)
+    if not ok then
+        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+    end
+
+    return ngx.OK
+end
+
+-- --------------------
 -- The main routine
 --
--- ---------------------------------------------------------------
+-- --------------------
 -- main routine
 -- vals from nginx conf
 --
@@ -509,6 +558,7 @@ local x = tonumber(ngx.var.x)
 local y = tonumber(ngx.var.y)
 local z = tonumber(ngx.var.z)
 local debug = nil
+local engine = 'renderd' -- or 'tirex' -- FIXME should use ngx.var.engine ?
 
 -- try renderd file.
 local ok = send_tile(map, x, y, z)
@@ -517,11 +567,14 @@ if ok then
 end
 
 if debug then
-    request_tirex_debug()
+    if engine == 'tirex' then
+        request_tirex_debug()
+    else
+        -- no debug function now...
+    end
 end
 
--- ask tirex to render it
-local ok = send_tirex_request(map, x, y, z)
+local ok = send_request(engine, map, x, y, z)
 if not ok then
    return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
 end
