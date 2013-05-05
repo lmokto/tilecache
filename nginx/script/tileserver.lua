@@ -272,6 +272,7 @@ end
 local renderdsock = 'unix:/var/lib/tirex/modtile.sock'
 local renderdtile = "/var/lib/tirex/tiles/"
 local renderd_resp_timeout = 30000
+local renderd_cmd_max_size = 61
 
 -- ========================================================
 -- protocol definitions
@@ -354,6 +355,47 @@ function unpack_msg(data)
     msg['map'] = data:sub(21,pad)
 end
 
+-- ========================================================
+-- function: renderd_command
+-- send tirex command thru unix domain datagram socket
+--
+function renderd_command(req)
+    -- send request to Tirex master socket
+    local tcpsock = ngx.socket.tcp()
+    local socketpath = renderdsock
+    tcpsock:setitimeout(renderd_resp_timeout)
+    local ok, err = tcpsock:setpeername(socketpath)
+    if not ok then
+        ngx.log(ngx.ERR, "renderd: setpeername error")
+        return ngx.exit(ngx.HTTP_SERVICE_UNAVAILABLE)
+    end
+    tcpsock:send(req)
+    local data, err = tcpsock:receive(renderd_cmd_max_size)
+    udpsock:close()
+    if not data then
+        ngx.log(ngx.ERR, "timeout ", mx, " ", my, " ", mz, err)
+        return nil
+    end
+    -- check result
+    local msg = unpack_msg(data)
+    if next(msg) == nil then -- something wrong
+        return nil
+    end
+    if msg["cmd"] ~= renderd_cmd["cmdDone"] then
+        ngx.log(ngx.ERR, "Renderd fails")
+        return nil
+    end
+    return ngx.OK
+end
+
+-- ========================================================
+-- funtion: send_renderd_request
+-- argument: map, x, y, z
+-- return:   if ok ngx.OK, if not ok then nil
+--
+function send_renderd_request (map, x, y, z)
+
+end
 
 -- ---------------------------------------------------------------
 -- End of Renderd Interface
