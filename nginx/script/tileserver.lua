@@ -179,19 +179,43 @@ function push_request_tirex_render(index,req)
     return cmds:safe_add(index, req, 0, 0)
 end
 
---  It does not share context
+-- ========================================================
+--  It does not share context and global vals/funcs
 --
 function tirex_handler()
     local cmds = ngx.shared.cmds
+    local stats = ngx.shared.stats
     local indexes = cmds:get_keys()
+    local udpsock = ngx.socket.udp()
+    udpsock:settimeout(20000)
+    udpsock:setpeername('unix:/var/run/tirex/master.sock')
     for key,index in pairs(indexes) do
         local req = cmds:get(index)
-        tirex_command(req)
-        send_signal(index)
-        cmds:delete(index)
+        udpsock:send(req)
+        local data, err = udpsock:receive(512)
+        if not data then
+            ngx.log(ngx.INFO, "receive error", err)
+        end
+   -- deserialize
+        local msg = {}
+        for line in string.gmatch(data, "[^\n]+") do
+            m,_,k,v = string.find(line,"([^=]+)=(.+)")
+            if  k ~= '' then
+                msg[k]=v
+            end
+        end
+        local resp = string.format("%s:%d:%d:%d", msg["map"], msg["x"], msg["y"], msg["z"])
+   -- send_signal
+        ok, err = stats:incr(resp, 1)
+        if not ok then
+            ngx.log(ngx.INFO, "error in incr")
+        end
+        cmds:delete(resp)
     end
+    udpsock:close()
     ngx.timer.at(0.01, tirex_handler)
 end
+-- ========================================================
 
 -- function request_tirex_debug
 --   debug request to tirex server
