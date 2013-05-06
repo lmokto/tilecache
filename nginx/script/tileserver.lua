@@ -106,7 +106,11 @@ end
 --
 function get_handle(key, timeout, flag)
     local stats = ngx.shared.stats
-    return stats:safe_add(key, 0, timeout, flag)
+    local ok, err, forcible = stats:add(key, 0, timeout, flag)
+    if ok ~= false then
+        return key, ''
+    end
+    return nil, err
 end
 
 -- returns new value (maybe 1)
@@ -164,6 +168,7 @@ function request_tirex_render(map, mx, my, mz, id)
     
     local handle = get_handle('_tirex_handler', 0, 0)
     if handle then
+        ngx.log(ngx.INFO, "start tirex_handler")
         ngx.timer.at(0, tirex_handler)
     end
     return ngx.OK
