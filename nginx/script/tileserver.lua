@@ -99,24 +99,26 @@ end
 --    we can use same key after timeout passed
 --
 -- ------------------------------------
-local stats = ngx.shared.stats
 
 --
 --  if key exist, it returns false
 --  else it returns true
 --
-function get_handle(key,timeout, flag)
+function get_handle(key, timeout, flag)
+    local stats = ngx.shared.stats
     return stats:safe_add(key, 0, timeout, flag)
 end
 
 -- returns new value (maybe 1)
 function send_signal(key)
+    local stats = ngx.shared.stats
     return stats:incr(key, 1)
 end
 
 -- return nil if timeout in wait
 --
 function wait_signal(key,timeout)
+    local stats = ngx.shared.stats
     local interval = 1
     local timeout = tonumber(timeout)
     for i=0, timeout do
@@ -148,6 +150,7 @@ local tirex_resp_timeout = 30000
 --
 function request_tirex_render(map, mx, my, mz, id)
     -- Create request command
+    local index = string.format("%s:%d:%d:%d",map, mx, my, mz)
     local priority = 8
     local req = serialize_msg({
         ["id"]   = tostring(id);
@@ -157,7 +160,32 @@ function request_tirex_render(map, mx, my, mz, id)
         ["x"]    = mx;
         ["y"]    = my;
         ["z"]    = mz})
-     return tirex_command(req)
+    push_request_tirex_render(index, req)
+    
+    local handle = get_handle('_tirex_handler', 0, 0)
+    if handle then
+        ngx.timer.at(0, tirex_handler)
+    end
+    return ngx.OK
+end
+
+function push_request_tirex_render(index,req)
+    local cmds = ngx.shared.cmds
+    return cmds:safe_add(index, req, 0, 0)
+end
+
+--  It does not share context
+--
+function tirex_handler()
+    local cmds = ngx.shared.cmds
+    local indexes = cmds:get_keys()
+    for index in indexes do
+        local req = cmds:get(index)
+        tirex_command(req)
+        send_signal(index)
+        cmds:delete(index)
+    end
+    ngx.timer.at(0.01, tirex_handler)
 end
 
 -- function request_tirex_debug
@@ -187,7 +215,7 @@ function tirex_command(req)
     local data, err = udpsock:receive(tirex_cmd_max_size)
     udpsock:close()
     if not data then
-        ngx.log(ngx.ERR, "timeout ", err)
+        ngx.log(ngx.ERR, err)
         return nil
     end
     -- check result
@@ -220,19 +248,12 @@ function send_tirex_request (map, x, y, z)
         return wait_signal(index, 30)
     end
 
-    -- Start Tirex session
+    -- Ask Tirex session
     local ok = request_tirex_render(map, mx, my, mz, id)
     if not ok then
         return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
     end
-
-    -- We got new metatile. signal to who waiting above(*)
-    local ok,err = send_signal(index)
-    if not ok then
-        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
-    end
-
-    return ngx.OK
+    return wait_signal(index, 30)
 end
 
 -- ---------------------------------------------------------------
