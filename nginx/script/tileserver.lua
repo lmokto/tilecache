@@ -184,7 +184,7 @@ end
 function tirex_handler()
     local cmds = ngx.shared.cmds
     local indexes = cmds:get_keys()
-    for index in indexes do
+    for key,index in pairs(indexes) do
         local req = cmds:get(index)
         tirex_command(req)
         send_signal(index)
